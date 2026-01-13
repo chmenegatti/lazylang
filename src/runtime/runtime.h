@@ -10,11 +10,14 @@
  * ------------------
  * - All lazylang programs that reach this layer already passed semantic
  *   analysis (SEMA) and code generation; the runtime never re-validates the AST.
+ * - Codegen is assumed correct. If something is wrong, the fix lives in SEMA or
+ *   the backend, never in the runtime.
  * - The runtime does not attempt to perform type checking, semantic
  *   enforcement, or any higher-level language logic. It simply exposes the
  *   helpers that the current C backend requires.
- * - Any future backend changes must continue to honor this contract or extend
- *   it explicitly; otherwise, fixes belong in SEMA/codegen, not here.
+ * - This module exists solely to support the current backend surface. Any
+ *   future backend changes must continue to honor this contract or extend it
+ *   explicitly; otherwise, fixes belong in SEMA/codegen, not here.
  */
 
 /*
@@ -65,17 +68,21 @@ size_t lz_string_length(const lz_string *value);
 void lz_string_release(lz_string *value);
 
 /*
- * Assignment hooks (lz_assign_*) centralize every observable mutation so that
- * future ARC/reference counting can intercept writes. They must never be
- * bypassed, inlined, or removed, even though they currently perform simple
- * assignments.
+ * Assignment hooks (lz_assign_string/lz_assign_ptr/lz_assign_result/lz_assign_maybe)
+ * centralize every observable mutation so that future ARC/reference counting can
+ * intercept writes. They must never be bypassed, inlined, or removed, even
+ * though they currently perform simple assignments.
  */
 void lz_assign_int64(int64_t *dst, int64_t value);
 void lz_assign_double(double *dst, double value);
 void lz_assign_bool(bool *dst, bool value);
+/* Handles string ownership handoff; never bypass. */
 void lz_assign_string(lz_string **dst, lz_string *value);
+/* Pointer assignment funnel for future ARC hooks. */
 void lz_assign_ptr(void **dst, void *value);
+/* Result assignment funnel for future ARC hooks. */
 void lz_assign_result(lz_result *dst, lz_result value);
+/* Maybe assignment funnel for future ARC hooks. */
 void lz_assign_maybe(lz_maybe *dst, lz_maybe value);
 
 void lz_runtime_log(lz_string *value);
