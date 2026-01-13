@@ -95,13 +95,25 @@ static void cg_emit_function_prototypes(CodegenContext *ctx);
 static void cg_emit_function_body(CodegenContext *ctx, const ASTFunctionDecl *fn);
 static void cg_emit_function_definitions(CodegenContext *ctx);
 static void cg_emit_entrypoint(CodegenContext *ctx);
-static void cg_emit_block(CodegenContext *ctx, ASTBlock *block);
-static void cg_emit_statement(CodegenContext *ctx, ASTNode *node);
+static void cg_emit_block(CodegenContext *ctx,
+                          ASTBlock *block,
+                          const char *tail_var,
+                          const char *tail_helper);
+static void cg_emit_statement(CodegenContext *ctx,
+                              ASTNode *node,
+                              const char *tail_var,
+                              const char *tail_helper);
 static void cg_emit_var_decl(CodegenContext *ctx, ASTVarDecl *decl);
 static void cg_emit_assignment(CodegenContext *ctx, ASTAssignStmt *assign);
-static void cg_emit_if(CodegenContext *ctx, ASTIfStmt *stmt);
+static void cg_emit_if(CodegenContext *ctx,
+                       ASTIfStmt *stmt,
+                       const char *tail_var,
+                       const char *tail_helper);
 static void cg_emit_return(CodegenContext *ctx, ASTReturnStmt *stmt);
-static void cg_emit_expr_stmt(CodegenContext *ctx, ASTExprStmt *stmt);
+static void cg_emit_expr_stmt(CodegenContext *ctx,
+                              ASTExprStmt *stmt,
+                              const char *tail_var,
+                              const char *tail_helper);
 static void cg_emit_expression(CodegenContext *ctx, ASTNode *node);
 static void cg_emit_literal(CodegenContext *ctx, ASTLiteralExpr *literal);
 static void cg_emit_identifier(CodegenContext *ctx, ASTIdentifierExpr *ident);
@@ -532,8 +544,31 @@ static void cg_emit_function_body(CodegenContext *ctx, const ASTFunctionDecl *fn
         cg_scope_add(ctx, param->name, param->type_name, false);
     }
 
-    for (size_t i = 0; i < fn->body->statements.count; i++) {
-        cg_emit_statement(ctx, fn->body->statements.items[i]);
+    const char *ret_type = cg_c_return_type_for(ctx, fn->return_type);
+    bool returns_value = strcmp(ret_type, "void") != 0;
+    size_t stmt_count = fn->body->statements.count;
+    ASTNode *last_stmt = stmt_count > 0 ? fn->body->statements.items[stmt_count - 1] : NULL;
+    bool needs_tail_return = returns_value && (stmt_count == 0 || !last_stmt || last_stmt->kind != AST_NODE_RETURN);
+    const char *tail_var = NULL;
+    const char *tail_helper = NULL;
+
+    if (needs_tail_return) {
+        const char *ret_storage_type = cg_c_type_for(ctx, fn->return_type);
+        tail_var = "__lz_ret";
+        tail_helper = cg_assign_helper_for(ctx, fn->return_type);
+        writer_line(&ctx->writer, "%s %s = {0};", ret_storage_type, tail_var);
+    }
+
+    for (size_t i = 0; i < stmt_count; i++) {
+        ASTNode *stmt = fn->body->statements.items[i];
+        bool is_last = (i + 1 == stmt_count);
+        const char *stmt_tail_var = (needs_tail_return && is_last) ? tail_var : NULL;
+        const char *stmt_tail_helper = (needs_tail_return && is_last) ? tail_helper : NULL;
+        cg_emit_statement(ctx, stmt, stmt_tail_var, stmt_tail_helper);
+    }
+
+    if (needs_tail_return) {
+        writer_line(&ctx->writer, "return %s;", tail_var);
     }
 
     cg_scope_pop(ctx);
@@ -575,13 +610,22 @@ static void cg_emit_entrypoint(CodegenContext *ctx) {
 }
 
 
-static void cg_emit_block(CodegenContext *ctx, ASTBlock *block) {
+static void cg_emit_block(CodegenContext *ctx,
+                          ASTBlock *block,
+                          const char *tail_var,
+                          const char *tail_helper) {
     writer_line(&ctx->writer, "{");
     writer_push(&ctx->writer);
     cg_scope_push(ctx);
     if (block) {
         for (size_t i = 0; i < block->statements.count; i++) {
-            cg_emit_statement(ctx, block->statements.items[i]);
+            bool is_last = (i + 1 == block->statements.count);
+            const char *stmt_tail_var = (tail_var && is_last) ? tail_var : NULL;
+            const char *stmt_tail_helper = (tail_helper && is_last) ? tail_helper : NULL;
+            cg_emit_statement(ctx,
+                              block->statements.items[i],
+                              stmt_tail_var,
+                              stmt_tail_helper);
         }
     }
     cg_scope_pop(ctx);
@@ -589,7 +633,10 @@ static void cg_emit_block(CodegenContext *ctx, ASTBlock *block) {
     writer_line(&ctx->writer, "}");
 }
 
-static void cg_emit_statement(CodegenContext *ctx, ASTNode *node) {
+static void cg_emit_statement(CodegenContext *ctx,
+                              ASTNode *node,
+                              const char *tail_var,
+                              const char *tail_helper) {
     if (ctx->had_error || !node) {
         return;
     }
@@ -601,13 +648,13 @@ static void cg_emit_statement(CodegenContext *ctx, ASTNode *node) {
             cg_emit_assignment(ctx, (ASTAssignStmt *)node);
             break;
         case AST_NODE_IF:
-            cg_emit_if(ctx, (ASTIfStmt *)node);
+            cg_emit_if(ctx, (ASTIfStmt *)node, tail_var, tail_helper);
             break;
         case AST_NODE_RETURN:
             cg_emit_return(ctx, (ASTReturnStmt *)node);
             break;
         case AST_NODE_EXPR_STMT:
-            cg_emit_expr_stmt(ctx, (ASTExprStmt *)node);
+            cg_emit_expr_stmt(ctx, (ASTExprStmt *)node, tail_var, tail_helper);
             break;
         case AST_NODE_FOR:
             cg_fail(ctx, &node->token, "for-in loops are not supported yet");
@@ -634,16 +681,19 @@ static void cg_emit_assignment(CodegenContext *ctx, ASTAssignStmt *assign) {
     cg_emit_assignment_call(ctx, assign->target, binding->type_name, assign->value);
 }
 
-static void cg_emit_if(CodegenContext *ctx, ASTIfStmt *stmt) {
+static void cg_emit_if(CodegenContext *ctx,
+                       ASTIfStmt *stmt,
+                       const char *tail_var,
+                       const char *tail_helper) {
     writer_begin_line(&ctx->writer);
     writer_printf(&ctx->writer, "if (");
     cg_emit_expression(ctx, stmt->condition);
     writer_printf(&ctx->writer, ") ");
     writer_end_line(&ctx->writer);
-    cg_emit_block(ctx, stmt->then_block);
+    cg_emit_block(ctx, stmt->then_block, tail_var, tail_helper);
     if (stmt->else_block) {
         writer_line(&ctx->writer, "else");
-        cg_emit_block(ctx, stmt->else_block);
+        cg_emit_block(ctx, stmt->else_block, tail_var, tail_helper);
     }
 }
 
@@ -658,12 +708,21 @@ static void cg_emit_return(CodegenContext *ctx, ASTReturnStmt *stmt) {
     writer_end_line(&ctx->writer);
 }
 
-static void cg_emit_expr_stmt(CodegenContext *ctx, ASTExprStmt *stmt) {
+static void cg_emit_expr_stmt(CodegenContext *ctx,
+                              ASTExprStmt *stmt,
+                              const char *tail_var,
+                              const char *tail_helper) {
     writer_begin_line(&ctx->writer);
-    if (stmt->expr) {
+    if (tail_var && tail_helper && stmt->expr) {
+        writer_printf(&ctx->writer, "%s(&%s, ", tail_helper, tail_var);
         cg_emit_expression(ctx, stmt->expr);
+        writer_printf(&ctx->writer, ");");
+    } else {
+        if (stmt->expr) {
+            cg_emit_expression(ctx, stmt->expr);
+        }
+        writer_printf(&ctx->writer, ";");
     }
-    writer_printf(&ctx->writer, ";");
     writer_end_line(&ctx->writer);
 }
 

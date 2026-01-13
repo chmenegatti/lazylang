@@ -1,0 +1,11 @@
+is_positive: (int) -> bool = (x)
+    if x > 0
+        true
+    else
+        false
+
+main: () -> null = ()
+    if is_positive(10)
+        log("positive")
+    else
+        log("negative")

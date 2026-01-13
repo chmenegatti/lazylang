@@ -1,0 +1,2 @@
+main: () -> null = ()
+    log("Hello, lazylang")
