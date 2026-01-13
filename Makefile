@@ -4,7 +4,8 @@ SRCS = $(wildcard src/*.c) \
 	$(wildcard src/ast/*.c) \
 	$(wildcard src/parser/*.c) \
 	$(wildcard src/sema/*.c) \
-	$(wildcard src/codegen/*.c)
+	$(wildcard src/codegen/*.c) \
+	$(wildcard src/runtime/*.c)
 
 all: lazylangc
 

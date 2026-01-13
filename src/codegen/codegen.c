@@ -85,8 +85,6 @@ static const CGVarBinding *cg_scope_lookup(const CodegenContext *ctx, const char
 static bool cg_emit_program(CodegenContext *ctx);
 static void cg_emit_file_header(CodegenContext *ctx);
 static void cg_emit_includes(CodegenContext *ctx);
-static void cg_emit_runtime_types(CodegenContext *ctx);
-static void cg_emit_runtime_forward_decls(CodegenContext *ctx);
 static void cg_emit_struct_forward_decls(CodegenContext *ctx);
 static void cg_emit_structs(CodegenContext *ctx);
 static void cg_emit_struct_assign_helpers(CodegenContext *ctx);
@@ -97,7 +95,6 @@ static void cg_emit_function_prototypes(CodegenContext *ctx);
 static void cg_emit_function_body(CodegenContext *ctx, const ASTFunctionDecl *fn);
 static void cg_emit_function_definitions(CodegenContext *ctx);
 static void cg_emit_entrypoint(CodegenContext *ctx);
-static void cg_emit_runtime_support(CodegenContext *ctx);
 static void cg_emit_block(CodegenContext *ctx, ASTBlock *block);
 static void cg_emit_statement(CodegenContext *ctx, ASTNode *node);
 static void cg_emit_var_decl(CodegenContext *ctx, ASTVarDecl *decl);
@@ -412,10 +409,6 @@ static bool cg_emit_program(CodegenContext *ctx) {
     cg_emit_file_header(ctx);
     cg_emit_includes(ctx);
     writer_blank_line(&ctx->writer);
-    cg_emit_runtime_types(ctx);
-    writer_blank_line(&ctx->writer);
-    cg_emit_runtime_forward_decls(ctx);
-    writer_blank_line(&ctx->writer);
     cg_emit_struct_forward_decls(ctx);
     writer_blank_line(&ctx->writer);
     cg_emit_structs(ctx);
@@ -427,8 +420,6 @@ static bool cg_emit_program(CodegenContext *ctx) {
     cg_emit_function_definitions(ctx);
     writer_blank_line(&ctx->writer);
     cg_emit_entrypoint(ctx);
-    writer_blank_line(&ctx->writer);
-    cg_emit_runtime_support(ctx);
     return !ctx->had_error;
 }
 
@@ -443,44 +434,15 @@ static void cg_emit_includes(CodegenContext *ctx) {
     writer_line(&ctx->writer, "#include <stdio.h>");
     writer_line(&ctx->writer, "#include <stdlib.h>");
     writer_line(&ctx->writer, "#include <string.h>");
-}
-
-static void cg_emit_runtime_types(CodegenContext *ctx) {
-    (void)ctx;
-    writer_line(&ctx->writer, "struct lz_string;");
-    writer_line(&ctx->writer, "typedef struct lz_result {");
-    writer_push(&ctx->writer);
-    writer_line(&ctx->writer, "bool is_ok;");
-    writer_line(&ctx->writer, "union { void *ptr; int64_t i64; double f64; bool boolean; } value;");
-    writer_line(&ctx->writer, "union { void *ptr; int64_t i64; double f64; bool boolean; } error;");
-    writer_pop(&ctx->writer);
-    writer_line(&ctx->writer, "} lz_result;");
-    writer_line(&ctx->writer, "typedef struct lz_maybe {");
-    writer_push(&ctx->writer);
-    writer_line(&ctx->writer, "bool has_value;");
-    writer_line(&ctx->writer, "union { void *ptr; int64_t i64; double f64; bool boolean; } data;");
-    writer_pop(&ctx->writer);
-    writer_line(&ctx->writer, "} lz_maybe;");
-}
-
-static void cg_emit_runtime_forward_decls(CodegenContext *ctx) {
     writer_line(&ctx->writer, "#if defined(__GNUC__) || defined(__clang__)");
     writer_line(&ctx->writer, "#define LZ_UNUSED __attribute__((unused))");
     writer_line(&ctx->writer, "#else");
     writer_line(&ctx->writer, "#define LZ_UNUSED");
     writer_line(&ctx->writer, "#endif");
-    writer_line(&ctx->writer, "static struct lz_string *lz_string_from_literal(const char *literal);");
-    writer_line(&ctx->writer, "static void LZ_UNUSED lz_assign_int64(int64_t *dst, int64_t value);");
-    writer_line(&ctx->writer, "static void LZ_UNUSED lz_assign_double(double *dst, double value);");
-    writer_line(&ctx->writer, "static void LZ_UNUSED lz_assign_bool(bool *dst, bool value);");
-    writer_line(&ctx->writer, "static void LZ_UNUSED lz_assign_string(struct lz_string **dst, struct lz_string *value);");
-    writer_line(&ctx->writer, "static void LZ_UNUSED lz_assign_ptr(void **dst, void *value);");
-    writer_line(&ctx->writer, "static void LZ_UNUSED lz_assign_result(lz_result *dst, lz_result value);");
-    writer_line(&ctx->writer, "static void LZ_UNUSED lz_assign_maybe(lz_maybe *dst, lz_maybe value);");
-    writer_line(&ctx->writer, "static void LZ_UNUSED lz_runtime_log(struct lz_string *value);");
-    writer_line(&ctx->writer, "#undef log");
-    writer_line(&ctx->writer, "#define log lz_runtime_log");
+    writer_line(&ctx->writer, "#define LZ_RUNTIME_DEFINE_STRUCTS");
+    writer_line(&ctx->writer, "#include \"src/runtime/runtime.h\"");
 }
+
 
 static void cg_emit_struct_forward_decls(CodegenContext *ctx) {
     for (size_t i = 0; i < ctx->struct_count; i++) {
@@ -612,79 +574,6 @@ static void cg_emit_entrypoint(CodegenContext *ctx) {
     writer_line(&ctx->writer, "}");
 }
 
-static void cg_emit_runtime_support(CodegenContext *ctx) {
-    writer_line(&ctx->writer, "struct lz_string {");
-    writer_push(&ctx->writer);
-    writer_line(&ctx->writer, "size_t length;");
-    writer_line(&ctx->writer, "const char *data;");
-    writer_pop(&ctx->writer);
-    writer_line(&ctx->writer, "};");
-    writer_blank_line(&ctx->writer);
-
-    writer_line(&ctx->writer,
-                "static struct lz_string *lz_string_from_literal(const char *literal) {");
-    writer_push(&ctx->writer);
-    writer_line(&ctx->writer, "struct lz_string *str = malloc(sizeof(*str));");
-    writer_line(&ctx->writer, "if (!str) { fprintf(stderr, \"Out of memory\\n\"); exit(1); }");
-    writer_line(&ctx->writer, "str->length = strlen(literal);");
-    writer_line(&ctx->writer, "str->data = literal;");
-    writer_line(&ctx->writer, "return str;");
-    writer_pop(&ctx->writer);
-    writer_line(&ctx->writer, "}");
-    writer_blank_line(&ctx->writer);
-
-    writer_line(&ctx->writer, "static void LZ_UNUSED lz_assign_int64(int64_t *dst, int64_t value) {");
-    writer_push(&ctx->writer);
-    writer_line(&ctx->writer, "*dst = value;");
-    writer_pop(&ctx->writer);
-    writer_line(&ctx->writer, "}");
-
-    writer_line(&ctx->writer, "static void LZ_UNUSED lz_assign_double(double *dst, double value) {");
-    writer_push(&ctx->writer);
-    writer_line(&ctx->writer, "*dst = value;");
-    writer_pop(&ctx->writer);
-    writer_line(&ctx->writer, "}");
-
-    writer_line(&ctx->writer, "static void LZ_UNUSED lz_assign_bool(bool *dst, bool value) {");
-    writer_push(&ctx->writer);
-    writer_line(&ctx->writer, "*dst = value;");
-    writer_pop(&ctx->writer);
-    writer_line(&ctx->writer, "}");
-
-    writer_line(&ctx->writer,
-                "static void LZ_UNUSED lz_assign_string(struct lz_string **dst, struct lz_string *value) {");
-    writer_push(&ctx->writer);
-    writer_line(&ctx->writer, "*dst = value;");
-    writer_pop(&ctx->writer);
-    writer_line(&ctx->writer, "}");
-
-    writer_line(&ctx->writer, "static void LZ_UNUSED lz_assign_ptr(void **dst, void *value) {");
-    writer_push(&ctx->writer);
-    writer_line(&ctx->writer, "*dst = value;");
-    writer_pop(&ctx->writer);
-    writer_line(&ctx->writer, "}");
-
-    writer_line(&ctx->writer, "static void LZ_UNUSED lz_assign_result(lz_result *dst, lz_result value) {");
-    writer_push(&ctx->writer);
-    writer_line(&ctx->writer, "*dst = value;");
-    writer_pop(&ctx->writer);
-    writer_line(&ctx->writer, "}");
-
-    writer_line(&ctx->writer, "static void LZ_UNUSED lz_assign_maybe(lz_maybe *dst, lz_maybe value) {");
-    writer_push(&ctx->writer);
-    writer_line(&ctx->writer, "*dst = value;");
-    writer_pop(&ctx->writer);
-    writer_line(&ctx->writer, "}");
-    writer_blank_line(&ctx->writer);
-
-    writer_line(&ctx->writer, "static void lz_runtime_log(struct lz_string *value) {");
-    writer_push(&ctx->writer);
-    writer_line(&ctx->writer,
-                "fwrite(value->data, 1, value->length, stdout);");
-    writer_line(&ctx->writer, "fputc('\\n', stdout);");
-    writer_pop(&ctx->writer);
-    writer_line(&ctx->writer, "}");
-}
 
 static void cg_emit_block(CodegenContext *ctx, ASTBlock *block) {
     writer_line(&ctx->writer, "{");
@@ -822,6 +711,10 @@ static void cg_emit_literal(CodegenContext *ctx, ASTLiteralExpr *literal) {
 }
 
 static void cg_emit_identifier(CodegenContext *ctx, ASTIdentifierExpr *ident) {
+    if (strcmp(ident->name, "log") == 0) {
+        writer_printf(&ctx->writer, "lz_runtime_log");
+        return;
+    }
     const CGVarBinding *binding = cg_scope_lookup(ctx, ident->name);
     if (binding) {
         writer_printf(&ctx->writer, "%s", ident->name);
@@ -1015,11 +908,13 @@ static bool cg_invoke_compiler(const char *compiler,
                                const char *c_path,
                                const char *binary_path) {
     char command[1024];
+    const char *runtime_path = "src/runtime/runtime.c";
     snprintf(command,
              sizeof(command),
-             "%s -std=c11 -Wall -Wextra \"%s\" -o \"%s\"",
+             "%s -std=c11 -Wall -Wextra \"%s\" \"%s\" -o \"%s\"",
              compiler,
              c_path,
+             runtime_path,
              binary_path);
     int result = system(command);
     if (result != 0) {
