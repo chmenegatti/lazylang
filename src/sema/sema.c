@@ -54,6 +54,12 @@ static void sema_add_var(SemaContext *ctx,
                          Token token);
 static VarSymbol *sema_lookup_var(SemaContext *ctx, const char *name);
 static void sema_register_function(SemaContext *ctx, ASTFunctionDecl *fn);
+static void sema_add_function_symbol(SemaContext *ctx,
+                                     const char *name,
+                                     const char *return_type,
+                                     const ASTFunctionDecl *decl,
+                                     Token token);
+static void sema_register_builtins(SemaContext *ctx);
 static const FunctionSymbol *sema_lookup_function(SemaContext *ctx, const char *name);
 static void sema_note_flow_usage(SemaContext *ctx, FlowMode mode, Token token);
 static FlowMode flow_mode_from_type(const char *type_name);
@@ -72,6 +78,7 @@ static void sema_check_unused_result(SemaContext *ctx, ASTExprStmt *stmt);
 void sema_check_program(ASTProgram *program) {
     SemaContext ctx;
     sema_context_init(&ctx);
+    sema_register_builtins(&ctx);
 
     for (size_t i = 0; i < program->declarations.count; i++) {
         ASTNode *node = program->declarations.items[i];
@@ -177,9 +184,17 @@ static VarSymbol *sema_lookup_var(SemaContext *ctx, const char *name) {
 }
 
 static void sema_register_function(SemaContext *ctx, ASTFunctionDecl *fn) {
+    sema_add_function_symbol(ctx, fn->name, fn->return_type, fn, fn->base.token);
+}
+
+static void sema_add_function_symbol(SemaContext *ctx,
+                                     const char *name,
+                                     const char *return_type,
+                                     const ASTFunctionDecl *decl,
+                                     Token token) {
     for (size_t i = 0; i < ctx->function_count; i++) {
-        if (strcmp(ctx->functions[i].name, fn->name) == 0) {
-            sema_error(fn->base.token, "function already declared");
+        if (strcmp(ctx->functions[i].name, name) == 0) {
+            sema_error(token, "function already declared");
         }
     }
     if (ctx->function_count == ctx->function_capacity) {
@@ -193,11 +208,36 @@ static void sema_register_function(SemaContext *ctx, ASTFunctionDecl *fn) {
         ctx->function_capacity = new_capacity;
     }
     ctx->functions[ctx->function_count++] = (FunctionSymbol){
-        .name = fn->name,
-        .return_type = fn->return_type,
-        .decl = fn,
-        .token = fn->base.token,
+        .name = name,
+        .return_type = return_type,
+        .decl = decl,
+        .token = token,
     };
+}
+
+static void sema_register_builtins(SemaContext *ctx) {
+    static const struct {
+        const char *name;
+        const char *return_type;
+    } builtins[] = {
+        { "log", "null" },
+    };
+
+    Token token = {
+        .lexeme = "",
+        .length = 0,
+        .line = 0,
+        .column = 0,
+        .type = TOKEN_IDENT,
+    };
+
+    for (size_t i = 0; i < sizeof(builtins) / sizeof(builtins[0]); i++) {
+        sema_add_function_symbol(ctx,
+                                 builtins[i].name,
+                                 builtins[i].return_type,
+                                 NULL,
+                                 token);
+    }
 }
 
 static const FunctionSymbol *sema_lookup_function(SemaContext *ctx, const char *name) {
